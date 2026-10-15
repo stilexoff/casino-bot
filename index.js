@@ -43,18 +43,50 @@ function addToJackpot(amount) {
 }
 
 // Les 10 Métiers & Étoiles d'investissement
+// 💼 Métiers & Plafonds de Mise Dynamiques (maxBet)
 const JOBS = [
-  { id: 1, name: "Plongeur de Casino", cost: 0, starCost: 100, gainPerStar: 10 },
-  { id: 2, name: "Valet de Parking", cost: 1000, starCost: 300, gainPerStar: 25 },
-  { id: 3, name: "Barman de Salon", cost: 3500, starCost: 800, gainPerStar: 60 },
-  { id: 4, name: "Croupier de Blackjack", cost: 10000, starCost: 2000, gainPerStar: 150 },
-  { id: 5, name: "Videur VIP", cost: 25000, starCost: 5000, gainPerStar: 350 },
-  { id: 6, name: "Chef de Salle", cost: 60000, starCost: 12000, gainPerStar: 800 },
-  { id: 7, name: "Manager du Casino", cost: 150000, starCost: 30000, gainPerStar: 1800 },
-  { id: 8, name: "Investisseur Partenaire", cost: 400000, starCost: 80000, gainPerStar: 4500 },
-  { id: 9, name: "Actionnaire Majoritaire", cost: 1000000, starCost: 200000, gainPerStar: 11000 },
-  { id: 10, name: "Propriétaire du Casino", cost: 2500000, starCost: 500000, gainPerStar: 28000 }
+  { id: 1, name: "Plongeur de Casino", cost: 0, starCost: 100, gainPerStar: 10, maxBet: 500 },
+  { id: 2, name: "Valet de Parking", cost: 1000, starCost: 300, gainPerStar: 25, maxBet: 2500 },
+  { id: 3, name: "Barman de Salon", cost: 3500, starCost: 800, gainPerStar: 60, maxBet: 10000 },
+  { id: 4, name: "Croupier de Blackjack", cost: 10000, starCost: 2000, gainPerStar: 150, maxBet: 30000 },
+  { id: 5, name: "Videur VIP", cost: 25000, starCost: 5000, gainPerStar: 350, maxBet: 100000 },
+  { id: 6, name: "Chef de Salle", cost: 60000, starCost: 12000, gainPerStar: 800, maxBet: 300000 },
+  { id: 7, name: "Manager du Casino", cost: 150000, starCost: 30000, gainPerStar: 1800, maxBet: 1000000 },
+  { id: 8, name: "Investisseur Partenaire", cost: 400000, starCost: 80000, gainPerStar: 4500, maxBet: 3000000 },
+  { id: 9, name: "Actionnaire Majoritaire", cost: 1000000, starCost: 200000, gainPerStar: 11000, maxBet: 10000000 },
+  { id: 10, name: "Propriétaire du Casino", cost: 2500000, starCost: 500000, gainPerStar: 28000, maxBet: Infinity }
 ];
+
+// Vérification du plafond de mise
+function checkBetLimit(userData, bet) {
+  const currentJob = JOBS.find(j => j.id === userData.job_id);
+  if (bet > currentJob.maxBet) {
+    return { valid: false, max: currentJob.maxBet, jobName: currentJob.name };
+  }
+  return { valid: true };
+}
+
+// Algorithme de calcul du Blackjack avec gestion dynamique des As (1 ou 11)
+function calculateBlackjackScore(hand) {
+  let score = 0;
+  let aces = 0;
+
+  for (let card of hand) {
+    if (card === 11) {
+      aces += 1;
+      score += 11;
+    } else {
+      score += card;
+    }
+  }
+
+  while (score > 21 && aces > 0) {
+    score -= 10;
+    aces -= 1;
+  }
+
+  return score;
+}
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
@@ -68,6 +100,8 @@ client.once('ready', async () => {
     { name: 'profile', description: 'Affiche ton solde, métier et étoiles' },
     { name: 'invest', description: 'Achète une étoile ou change de métier' },
     { name: 'jackpot', description: 'Consulte le montant actuel du Jackpot Progressif' },
+    { name: 'leaderboard', description: 'Affiche le TOP 10 des joueurs les plus riches' },
+
     {
       name: 'addmoney',
       description: '[Admin] Ajoute de l\'argent à un utilisateur',
@@ -86,7 +120,7 @@ client.once('ready', async () => {
     ]},
     {
       name: 'duel',
-      description: 'Défie un autre membre au Shifumi (sans taxe)',
+      description: 'Défie un autre membre au Shifumi ',
       options: [
         { name: 'adversaire', type: 6, description: 'Le membre à défier', required: true },
         { name: 'mise', type: 4, description: 'Montant de la mise du duel', required: true }
