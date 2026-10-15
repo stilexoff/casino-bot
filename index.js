@@ -51,6 +51,14 @@ client.once('ready', async () => {
     { name: 'claim', description: 'Récolte tes revenus passifs d\'investissements' },
     { name: 'profile', description: 'Affiche ton solde, métier et étoiles' },
     { name: 'invest', description: 'Achète une étoile ou change de métier' },
+    {
+      name: 'addmoney',
+      description: '[Admin] Ajoute de l\'argent à un utilisateur',
+      options: [
+        { name: 'utilisateur', type: 6, description: 'Le joueur à qui donner des pièces', required: true },
+        { name: 'montant', type: 4, description: 'Le montant de pièces à ajouter', required: true }
+      ]
+    },
     { name: 'coinflip', description: 'Pile ou Face avec animation', options: [
         { name: 'mise', type: 4, description: 'Montant à miser', required: true },
         { name: 'choix', type: 3, description: 'pile ou face', required: true, choices: [{name: 'Pile', value: 'pile'}, {name: 'Face', value: 'face'}]}
@@ -59,10 +67,28 @@ client.once('ready', async () => {
         { name: 'mise', type: 4, description: 'Montant à miser', required: true },
         { name: 'choix', type: 3, description: 'ton choix', required: true, choices: [{name: 'Pierre', value: 'pierre'}, {name: 'Feuille', value: 'feuille'}, {name: 'Ciseaux', value: 'ciseaux'}]}
     ]},
-    { name: 'roulette', description: 'Roulette de casino animée', options: [
+    {
+      name: 'roulette',
+      description: 'Roulette de casino (Rouge, Noir, Pair, Impair, Vert ou Numéro exact)',
+      options: [
         { name: 'mise', type: 4, description: 'Montant à miser', required: true },
-        { name: 'couleur', type: 3, description: 'rouge ou noir', required: true, choices: [{name: '🔴 Rouge (x2)', value: 'rouge'}, {name: '⚫ Noir (x2)', value: 'noir'}]}
-    ]},
+        { 
+          name: 'type', 
+          type: 3, 
+          description: 'Type de mise', 
+          required: true, 
+          choices: [
+            { name: '🔴 Rouge (x2)', value: 'rouge' },
+            { name: '⚫ Noir (x2)', value: 'noir' },
+            { name: '⚖️ Pair (x2)', value: 'pair' },
+            { name: '⚡ Impair (x2)', value: 'impair' },
+            { name: '🟢 Vert / 0 (x35)', value: 'vert' },
+            { name: '🎯 Numéro exact (x35)', value: 'numero' }
+          ] 
+        },
+        { name: 'numero', type: 4, description: 'Si tu as choisi "Numéro exact", écris un chiffre entre 0 et 36', required: false }
+      ]
+    },
     { name: 'blackjack', description: 'Joue au Blackjack contre la banque', options: [
         { name: 'mise', type: 4, description: 'Montant à miser', required: true }
     ]}
@@ -120,7 +146,7 @@ client.on('interactionCreate', async interaction => {
     const hourlyGain = userData.stars * currentJob.gainPerStar;
     const totalGain = hourlyGain * hours;
 
-    if (totalGain <= 0) return interaction.reply({ content: `❌ Tu n'as pas encore investi dans d'étoiles pour générer un salaire passif.`, ephemeral: true });
+    if (totalGain <= 0) return interaction.reply({ content: `❌ Tu n'as pas encore investi d'étoiles pour générer un salaire passif.`, ephemeral: true });
 
     userData.money += totalGain;
     userData.last_claim = now;
@@ -142,7 +168,7 @@ client.on('interactionCreate', async interaction => {
         .setTitle(`🎰 Fiche Joueur : ${user.username}`)
         .addFields(
           { name: '💵 Solde', value: `**${userData.money.toLocaleString()} 🪙**`, inline: true },
-          { name: '💼 Post', value: `Niv.${currentJob.id} - **${currentJob.name}**`, inline: true },
+          { name: '💼 Poste', value: `Niv.${currentJob.id} - **${currentJob.name}**`, inline: true },
           { name: '⭐ Investissements', value: `${starsStr} (${userData.stars}/5)` },
           { name: '📈 Revenu Passif', value: `**+${passiveHour.toLocaleString()} 🪙 / heure**` }
         )
@@ -172,9 +198,32 @@ client.on('interactionCreate', async interaction => {
       userData.stars = 0;
       saveDB();
       return interaction.reply({ embeds: [
-        new EmbedBuilder().setTitle('🎉 PROMOTION ACCORDÉE !').setDescription(`Tu devrais maintenant être appelé : **${nextJob.name}** !\nInvestis dans ce nouveau poste pour exploser tes revenus passifs !`).setColor('#E91E63')
+        new EmbedBuilder().setTitle('🎉 PROMOTION ACCORDÉE !').setDescription(`Tu es promu : **${nextJob.name}** !\nInvestis dans ce nouveau poste pour booster tes revenus passifs !`).setColor('#E91E63')
       ]});
     }
+  }
+
+  // 6. 💸 ADMIN : ADDMONEY
+  if (commandName === 'addmoney') {
+    if (!interaction.member.permissions.has('Administrator')) {
+      return interaction.reply({ content: '❌ Commande réservée aux administrateurs du serveur.', ephemeral: true });
+    }
+
+    const targetUser = options.getUser('utilisateur');
+    const amount = options.getInteger('montant');
+
+    if (amount <= 0) return interaction.reply({ content: '❌ Le montant doit être supérieur à 0.', ephemeral: true });
+
+    const targetData = getUser(targetUser.id);
+    targetData.money += amount;
+    saveDB();
+
+    return interaction.reply({ embeds: [
+      new EmbedBuilder()
+        .setTitle('⚙️ [ADMIN] Injection de fonds')
+        .setDescription(`Ajout de **+${amount.toLocaleString()} 🪙** sur le compte de ${targetUser}.\nNouveau solde : **${targetData.money.toLocaleString()} 🪙**`)
+        .setColor('#27AE60')
+    ]});
   }
 
   // ================= GAMBLING =================
@@ -233,29 +282,60 @@ client.on('interactionCreate', async interaction => {
     ]});
   }
 
-  // 🎰 ROULETTE
+  // 🎰 ROULETTE COMPLÈTE (Rouge, Noir, Pair, Impair, Vert, Numéro exact)
   if (commandName === 'roulette') {
     const bet = options.getInteger('mise');
-    const colorChoice = options.getString('couleur');
+    const type = options.getString('type');
+    const chosenNum = options.getInteger('numero');
+
     if (bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Solde insuffisant.', ephemeral: true });
 
-    await interaction.deferReply();
-    const sequence = ['🔴 19', '⚫ 31', '🟢 0', '🔴 7', '⚫ 15', '🔴 36'];
-    for (let s of sequence) {
-      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🎰 La roulette tourne...').setDescription(`👉 [ **${s}** ] 👈`).setColor('#34495E')] });
-      await new Promise(r => setTimeout(r, 500));
+    if (type === 'numero' && (chosenNum === null || chosenNum < 0 || chosenNum > 36)) {
+      return interaction.reply({ content: '❌ Pour miser sur un numéro exact, tu dois indiquer un chiffre valide entre **0 et 36** dans l\'option `numero`.', ephemeral: true });
     }
 
-    const isRed = Math.random() < 0.48;
-    const finalColor = isRed ? 'rouge' : 'noir';
-    const won = finalColor === colorChoice;
-    userData.money += won ? bet : -bet;
+    await interaction.deferReply();
+    const sequence = ['🔴 19', '⚫ 31', '🟢 0', '🔴 7', '⚫ 15', '🔴 36', '⚖️ 12'];
+    for (let s of sequence) {
+      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🎰 La roulette tourne...').setDescription(`👉 [ **${s}** ] 👈`).setColor('#34495E')] });
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    // Tirage du nombre réel de la roulette (0 à 36)
+    const winningNumber = Math.floor(Math.random() * 37); // 0 à 36
+    
+    // Détermination de la couleur et de la parité du numéro gagnant
+    let winningColor = 'vert'; // 0 est vert
+    if (winningNumber !== 0) {
+      // Les rouges classiques de la roulette française/européenne
+      const reds = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+      winningColor = reds.includes(winningNumber) ? 'rouge' : 'noir';
+    }
+    const winningParity = winningNumber === 0 ? 'zero' : (winningNumber % 2 === 0 ? 'pair' : 'impair');
+
+    // Évaluation de la victoire selon le choix du joueur
+    let won = false;
+    let multiplier = 0;
+
+    if (type === 'rouge' && winningColor === 'rouge') { won = true; multiplier = 2; }
+    else if (type === 'noir' && winningColor === 'noir') { won = true; multiplier = 2; }
+    else if (type === 'pair' && winningParity === 'pair') { won = true; multiplier = 2; }
+    else if (type === 'impair' && winningParity === 'impair') { won = true; multiplier = 2; }
+    else if (type === 'vert' && winningNumber === 0) { won = true; multiplier = 35; }
+    else if (type === 'numero' && winningNumber === chosenNum) { won = true; multiplier = 35; }
+
+    const netGain = won ? (bet * (multiplier - 1)) : -bet;
+    userData.money += netGain;
     saveDB();
+
+    const colorEmoji = winningColor === 'rouge' ? '🔴' : (winningColor === 'noir' ? '⚫' : '🟢');
 
     await interaction.editReply({ embeds: [
       new EmbedBuilder()
         .setTitle(won ? '🎰 VICTOIRE À LA ROULETTE !' : '🎰 PERDU !')
-        .setDescription(`La bille s'arrête sur : **${finalColor.toUpperCase()}** (${isRed ? '🔴' : '⚫'})\n${won ? `Tu gagnes **+${bet} 🪙**` : `Tu perds **-${bet} 🪙**`}`)
+        .setDescription(`Le chiffre gagnant est le : **${winningNumber}** (${colorEmoji} ${winningColor.toUpperCase()})\n\n` +
+          `• **Ton pari :** ${type === 'numero' ? `Numéro ${chosenNum}` : type.toUpperCase()}\n` +
+          `${won ? `🎉 Tu remportes **+${netGain.toLocaleString()} 🪙** (x${multiplier}) !` : `💥 Tu perds **-${bet} 🪙**.`}`)
         .setColor(won ? '#2ECC71' : '#E74C3C')
     ]});
   }
@@ -300,7 +380,7 @@ client.on('interactionCreate', async interaction => {
           saveDB();
           collector.stop('bust');
           return i.update({ embeds: [
-            new EmbedBuilder().setTitle('💥 DEPASSEMENT (BUST) !').setDescription(`Tu as fait **${getScore(playerHand)}**. Tu perds **-${bet} 🪙**.`).setColor('#E74C3C')
+            new EmbedBuilder().setTitle('💥 DÉPASSEMENT (BUST) !').setDescription(`Tu as fait **${getScore(playerHand)}**. Tu perds **-${bet} 🪙**.`).setColor('#E74C3C')
           ], components: [] });
         }
         await i.update({ embeds: [getEmbed()] });
@@ -308,7 +388,6 @@ client.on('interactionCreate', async interaction => {
 
       if (i.customId === 'stand') {
         collector.stop('stand');
-        // Tour de la banque
         while (getScore(dealerHand) < 17) {
           dealerHand.push(draw());
         }
