@@ -1,19 +1,27 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const fs = require('fs');
 
-// Base de données en fichier JSON local (100% compatible mobile & cloud)
+// Base de données en fichier JSON local
 const DB_FILE = './database.json';
-let db = {};
+let db = { users: {}, jackpot: 1000 };
+
 if (fs.existsSync(DB_FILE)) {
-  try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch (e) { db = {}; }
+  try { 
+    const loadedData = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    if (loadedData.users) db = loadedData;
+    else db = { users: loadedData, jackpot: 1000 };
+  } catch (e) { 
+    db = { users: {}, jackpot: 1000 }; 
+  }
 }
+
 function saveDB() {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
 function getUser(userId) {
-  if (!db[userId]) {
-    db[userId] = {
+  if (!db.users[userId]) {
+    db.users[userId] = {
       money: 500,
       job_id: 1,
       stars: 0,
@@ -23,7 +31,15 @@ function getUser(userId) {
     };
     saveDB();
   }
-  return db[userId];
+  return db.users[userId];
+}
+
+function addToJackpot(amount) {
+  const tax = Math.floor(amount * 0.10); // 10% des pertes alimentent le jackpot
+  if (tax > 0) {
+    db.jackpot = (db.jackpot || 1000) + tax;
+    saveDB();
+  }
 }
 
 // Les 10 Métiers & Étoiles d'investissement
@@ -51,6 +67,7 @@ client.once('ready', async () => {
     { name: 'claim', description: 'Récolte tes revenus passifs d\'investissements' },
     { name: 'profile', description: 'Affiche ton solde, métier et étoiles' },
     { name: 'invest', description: 'Achète une étoile ou change de métier' },
+    { name: 'jackpot', description: 'Consulte le montant actuel du Jackpot Progressif' },
     {
       name: 'addmoney',
       description: '[Admin] Ajoute de l\'argent à un utilisateur',
@@ -63,10 +80,25 @@ client.once('ready', async () => {
         { name: 'mise', type: 4, description: 'Montant à miser', required: true },
         { name: 'choix', type: 3, description: 'pile ou face', required: true, choices: [{name: 'Pile', value: 'pile'}, {name: 'Face', value: 'face'}]}
     ]},
-    { name: 'shifumi', description: 'Pierre-Feuille-Ciseaux', options: [
+    { name: 'shifumi', description: 'Pierre-Feuille-Ciseaux contre le bot', options: [
         { name: 'mise', type: 4, description: 'Montant à miser', required: true },
         { name: 'choix', type: 3, description: 'ton choix', required: true, choices: [{name: 'Pierre', value: 'pierre'}, {name: 'Feuille', value: 'feuille'}, {name: 'Ciseaux', value: 'ciseaux'}]}
     ]},
+    {
+      name: 'duel',
+      description: 'Défie un autre membre au Shifumi (sans taxe)',
+      options: [
+        { name: 'adversaire', type: 6, description: 'Le membre à défier', required: true },
+        { name: 'mise', type: 4, description: 'Montant de la mise du duel', required: true }
+      ]
+    },
+    {
+      name: 'crash',
+      description: 'Jeu du Crash : Encaisse avant que la fusée n\'explose !',
+      options: [
+        { name: 'mise', type: 4, description: 'Montant à miser', required: true }
+      ]
+    },
     {
       name: 'roulette',
       description: 'Roulette de casino (Rouge, Noir, Pair, Impair, Vert ou Numéro exact)',
@@ -82,7 +114,7 @@ client.once('ready', async () => {
             { name: '⚫ Noir (x2)', value: 'noir' },
             { name: '⚖️ Pair (x2)', value: 'pair' },
             { name: '⚡ Impair (x2)', value: 'impair' },
-            { name: '🟢 Vert / 0 (x35)', value: 'vert' },
+            { name: '🟢 Vert / 0 (x35 + JACKPOT)', value: 'vert' },
             { name: '🎯 Numéro exact (x35)', value: 'numero' }
           ] 
         },
@@ -137,7 +169,7 @@ client.on('interactionCreate', async interaction => {
     ]});
   }
 
-  // 3. CLAIM (Revenu Passif)
+  // 3. CLAIM
   if (commandName === 'claim') {
     const hours = Math.floor((now - userData.last_claim) / (1000 * 60 * 60));
     if (hours < 1) return interaction.reply({ content: `⏳ Laisse couler au moins 1 heure d'investissement.`, ephemeral: true });
@@ -176,7 +208,7 @@ client.on('interactionCreate', async interaction => {
     ]});
   }
 
-  // 5. INVEST (Étoiles & Métier)
+  // 5. INVEST
   if (commandName === 'invest') {
     const currentJob = JOBS.find(j => j.id === userData.job_id);
     
@@ -203,15 +235,23 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // 6. 💸 ADMIN : ADDMONEY
+  // 6. JACKPOT DISPLAY
+  if (commandName === 'jackpot') {
+    return interaction.reply({ embeds: [
+      new EmbedBuilder()
+        .setTitle('🎰 JACKPOT PROGRESSIF DU CASINO')
+        .setDescription(`Cagnotte actuelle : **${(db.jackpot || 1000).toLocaleString()} 🪙** !\n\n*10% de toutes les pertes des joueurs alimentent cette cagnotte. Pour la décrocher, gagne un pari sur le **0 (VERT)** à la roulette !*`)
+        .setColor('#FFD700')
+    ]});
+  }
+
+  // 7. ADMIN ADDMONEY
   if (commandName === 'addmoney') {
     if (!interaction.member.permissions.has('Administrator')) {
       return interaction.reply({ content: '❌ Commande réservée aux administrateurs du serveur.', ephemeral: true });
     }
-
     const targetUser = options.getUser('utilisateur');
     const amount = options.getInteger('montant');
-
     if (amount <= 0) return interaction.reply({ content: '❌ Le montant doit être supérieur à 0.', ephemeral: true });
 
     const targetData = getUser(targetUser.id);
@@ -228,6 +268,170 @@ client.on('interactionCreate', async interaction => {
 
   // ================= GAMBLING =================
 
+  // 🚀 CRASH GAME
+  if (commandName === 'crash') {
+    const bet = options.getInteger('mise');
+    if (bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Solde insuffisant.', ephemeral: true });
+
+    userData.money -= bet; // On prélève la mise
+    saveDB();
+
+    // Calcul du point de crash aléatoire
+    const crashPoint = +(1 + Math.random() * Math.random() * 8).toFixed(2); // entre 1.00x et ~9.00x
+    let currentMultiplier = 1.00;
+    let cashedOut = false;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('cashout').setLabel('💸 CASH OUT').setStyle(ButtonStyle.Success)
+    );
+
+    const getEmbed = (mult, finished = false, crashed = false) => new EmbedBuilder()
+      .setTitle('🚀 Jeu du Crash')
+      .setDescription(crashed 
+        ? `💥 **CRASH À x${mult.toFixed(2)} !**\nTu as perdu **-${bet} 🪙**.` 
+        : finished 
+        ? `🎉 **CASH OUT RÉUSSI À x${mult.toFixed(2)} !**\nTu remportes **+${Math.floor(bet * mult).toLocaleString()} 🪙** !`
+        : `Multiplicateur actuel : **x${mult.toFixed(2)}** 📈\n*Clique vite sur Cash Out avant le Crash !*`)
+      .setColor(crashed ? '#E74C3C' : finished ? '#2ECC71' : '#F39C12');
+
+    const response = await interaction.reply({ embeds: [getEmbed(currentMultiplier)], components: [row], fetchReply: true });
+
+    const collector = response.createMessageComponentCollector({ componentType: ComponentType.Button, time: 20000 });
+
+    const interval = setInterval(async () => {
+      if (cashedOut) { clearInterval(interval); return; }
+
+      currentMultiplier += 0.20;
+      if (currentMultiplier >= crashPoint) {
+        clearInterval(interval);
+        collector.stop('crashed');
+        addToJackpot(bet); // Pertes -> Jackpot
+
+        await interaction.editReply({ embeds: [getEmbed(crashPoint, false, true)], components: [] });
+      } else {
+        await interaction.editReply({ embeds: [getEmbed(currentMultiplier)] }).catch(() => {});
+      }
+    }, 1200);
+
+    collector.on('collect', async i => {
+      if (i.user.id !== user.id) return i.reply({ content: 'Pas ta partie !', ephemeral: true });
+      if (i.customId === 'cashout' && !cashedOut) {
+        cashedOut = true;
+        clearInterval(interval);
+        collector.stop('cashed_out');
+
+        const winAmount = Math.floor(bet * currentMultiplier);
+        userData.money += winAmount;
+        saveDB();
+
+        await i.update({ embeds: [getEmbed(currentMultiplier, true, false)], components: [] });
+      }
+    });
+  }
+
+  // ⚔️ DUEL SHIFUMI SANS TAXE
+  if (commandName === 'duel') {
+    const target = options.getUser('adversaire');
+    const bet = options.getInteger('mise');
+
+    if (target.id === user.id || target.bot) return interaction.reply({ content: '❌ Tu ne peux pas te défier toi-même ou un bot !', ephemeral: true });
+    if (bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Solde insuffisant.', ephemeral: true });
+
+    const targetData = getUser(target.id);
+    if (targetData.money < bet) return interaction.reply({ content: `❌ ${target.username} n'a pas assez de pièces pour ce duel !`, ephemeral: true });
+
+    const rowAccept = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('accept_duel').setLabel('✅ Accepter').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('refuse_duel').setLabel('❌ Refuser').setStyle(ButtonStyle.Danger)
+    );
+
+    const embedReq = new EmbedBuilder()
+      .setTitle('⚔️ DEFIS SHIFUMI EN DUEL !')
+      .setDescription(`${user} défie ${target} pour une mise de **${bet.toLocaleString()} 🪙** !\n*(100% du pot au gagnant, 0% de taxe !)*`)
+      .setColor('#9B59B6');
+
+    const resp = await interaction.reply({ content: `${target}`, embeds: [embedReq], components: [rowAccept], fetchReply: true });
+
+    const collector = resp.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30000 });
+
+    collector.on('collect', async i => {
+      if (i.user.id !== target.id) return i.reply({ content: 'Ce défi ne t\'est pas destiné.', ephemeral: true });
+
+      if (i.customId === 'refuse_duel') {
+        collector.stop('refused');
+        return i.update({ embeds: [new EmbedBuilder().setTitle('❌ Défi refusé.').setColor('#E74C3C')], components: [] });
+      }
+
+      if (i.customId === 'accept_duel') {
+        collector.stop('accepted');
+
+        // Retrait des mises
+        userData.money -= bet;
+        targetData.money -= bet;
+        saveDB();
+
+        let choice1 = null;
+        let choice2 = null;
+
+        const rowChoice = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('pierre').setLabel('🪨 Pierre').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('feuille').setLabel('🍃 Feuille').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('ciseaux').setLabel('✂️ Ciseaux').setStyle(ButtonStyle.Primary)
+        );
+
+        await i.update({ 
+          embeds: [new EmbedBuilder().setTitle('⚔️ DUEL ACCEPTÉ !').setDescription(`Les deux joueurs doivent choisir leur coup ci-dessous. Vos choix restent secrets.`).setColor('#3498DB')],
+          components: [rowChoice]
+        });
+
+        const gameCollector = resp.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30000 });
+
+        gameCollector.on('collect', async btn => {
+          if (btn.user.id !== user.id && btn.user.id !== target.id) return btn.reply({ content: 'Tu n\'es pas dans ce duel.', ephemeral: true });
+
+          if (btn.user.id === user.id && !choice1) choice1 = btn.customId;
+          if (btn.user.id === target.id && !choice2) choice2 = btn.customId;
+
+          await btn.reply({ content: `Choix enregistré : **${btn.customId.toUpperCase()}** !`, ephemeral: true });
+
+          if (choice1 && choice2) {
+            gameCollector.stop('done');
+
+            let winner = null;
+            if (choice1 === choice2) winner = 'draw';
+            else if (
+              (choice1 === 'pierre' && choice2 === 'ciseaux') ||
+              (choice1 === 'feuille' && choice2 === 'pierre') ||
+              (choice1 === 'ciseaux' && choice2 === 'feuille')
+            ) winner = user;
+            else winner = target;
+
+            if (winner === 'draw') {
+              userData.money += bet;
+              targetData.money += bet;
+              saveDB();
+              return interaction.editReply({ embeds: [
+                new EmbedBuilder().setTitle('⚖️ ÉGALITÉ DANS LE DUEL !').setDescription(`${user} (${choice1}) vs ${target} (${choice2})\nLes mises ont été remboursées.`).setColor('#F1C40F')
+              ], components: [] });
+            } else {
+              const totalGain = bet * 2; // 0% TAXE
+              const winnerData = getUser(winner.id);
+              winnerData.money += totalGain;
+              saveDB();
+
+              return interaction.editReply({ embeds: [
+                new EmbedBuilder()
+                  .setTitle(`🏆 VICTOIRE DE ${winner.username.toUpperCase()} !`)
+                  .setDescription(`${user} (**${choice1}**) vs ${target} (**${choice2}**)\n\n🎉 ${winner} remporte l'intégralité du pot soit **${totalGain.toLocaleString()} 🪙** !`)
+                  .setColor('#2ECC71')
+              ], components: [] });
+            }
+          }
+        });
+      }
+    });
+  }
+
   // 🎲 PILE OU FACE
   if (commandName === 'coinflip') {
     const bet = options.getInteger('mise');
@@ -240,7 +444,8 @@ client.on('interactionCreate', async interaction => {
     setTimeout(async () => {
       const result = Math.random() < 0.5 ? 'pile' : 'face';
       const won = result === choice;
-      userData.money += won ? bet : -bet;
+      if (won) userData.money += bet;
+      else { userData.money -= bet; addToJackpot(bet); }
       saveDB();
 
       await interaction.editReply({ embeds: [
@@ -252,26 +457,20 @@ client.on('interactionCreate', async interaction => {
     }, 2500);
   }
 
-  // ✂️ SHIFUMI
+  // ✂️ SHIFUMI VS BOT
   if (commandName === 'shifumi') {
     const bet = options.getInteger('mise');
     const choice = options.getString('choix');
     if (bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Solde insuffisant.', ephemeral: true });
 
     await interaction.deferReply();
-    const steps = ['🪨 Pierre...', '🍃 Feuille...', '✂️ Ciseaux !'];
-    for (let s of steps) {
-      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle(s).setColor('#3498DB')] });
-      await new Promise(r => setTimeout(r, 700));
-    }
-
     const botChoice = ['pierre', 'feuille', 'ciseaux'][Math.floor(Math.random() * 3)];
     let outcome = 'draw';
     if ((choice === 'pierre' && botChoice === 'ciseaux') || (choice === 'feuille' && botChoice === 'pierre') || (choice === 'ciseaux' && botChoice === 'feuille')) outcome = 'win';
     else if (choice !== botChoice) outcome = 'lose';
 
     if (outcome === 'win') userData.money += bet;
-    if (outcome === 'lose') userData.money -= bet;
+    if (outcome === 'lose') { userData.money -= bet; addToJackpot(bet); }
     saveDB();
 
     await interaction.editReply({ embeds: [
@@ -282,65 +481,69 @@ client.on('interactionCreate', async interaction => {
     ]});
   }
 
-  // 🎰 ROULETTE COMPLÈTE (Rouge, Noir, Pair, Impair, Vert, Numéro exact)
+  // 🎰 ROULETTE + JACKPOT SUR LE 0
   if (commandName === 'roulette') {
     const bet = options.getInteger('mise');
     const type = options.getString('type');
     const chosenNum = options.getInteger('numero');
 
     if (bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Solde insuffisant.', ephemeral: true });
-
     if (type === 'numero' && (chosenNum === null || chosenNum < 0 || chosenNum > 36)) {
-      return interaction.reply({ content: '❌ Pour miser sur un numéro exact, tu dois indiquer un chiffre valide entre **0 et 36** dans l\'option `numero`.', ephemeral: true });
+      return interaction.reply({ content: '❌ Indique un chiffre entre 0 et 36 dans `numero`.', ephemeral: true });
     }
 
     await interaction.deferReply();
-    const sequence = ['🔴 19', '⚫ 31', '🟢 0', '🔴 7', '⚫ 15', '🔴 36', '⚖️ 12'];
-    for (let s of sequence) {
-      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🎰 La roulette tourne...').setDescription(`👉 [ **${s}** ] 👈`).setColor('#34495E')] });
-      await new Promise(r => setTimeout(r, 400));
-    }
-
-    // Tirage du nombre réel de la roulette (0 à 36)
-    const winningNumber = Math.floor(Math.random() * 37); // 0 à 36
+    const winningNumber = Math.floor(Math.random() * 37);
     
-    // Détermination de la couleur et de la parité du numéro gagnant
-    let winningColor = 'vert'; // 0 est vert
+    let winningColor = 'vert';
     if (winningNumber !== 0) {
-      // Les rouges classiques de la roulette française/européenne
       const reds = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
       winningColor = reds.includes(winningNumber) ? 'rouge' : 'noir';
     }
     const winningParity = winningNumber === 0 ? 'zero' : (winningNumber % 2 === 0 ? 'pair' : 'impair');
 
-    // Évaluation de la victoire selon le choix du joueur
     let won = false;
     let multiplier = 0;
+    let wonJackpot = false;
 
     if (type === 'rouge' && winningColor === 'rouge') { won = true; multiplier = 2; }
     else if (type === 'noir' && winningColor === 'noir') { won = true; multiplier = 2; }
     else if (type === 'pair' && winningParity === 'pair') { won = true; multiplier = 2; }
     else if (type === 'impair' && winningParity === 'impair') { won = true; multiplier = 2; }
-    else if (type === 'vert' && winningNumber === 0) { won = true; multiplier = 35; }
-    else if (type === 'numero' && winningNumber === chosenNum) { won = true; multiplier = 35; }
+    else if (type === 'vert' && winningNumber === 0) { won = true; multiplier = 35; wonJackpot = true; }
+    else if (type === 'numero' && winningNumber === chosenNum) { 
+      won = true; 
+      multiplier = 35; 
+      if (winningNumber === 0) wonJackpot = true;
+    }
 
-    const netGain = won ? (bet * (multiplier - 1)) : -bet;
-    userData.money += netGain;
+    let netGain = 0;
+    if (won) {
+      netGain = bet * (multiplier - 1);
+      if (wonJackpot) {
+        netGain += (db.jackpot || 1000);
+        db.jackpot = 1000; // Reset du jackpot à 1000
+      }
+      userData.money += netGain;
+    } else {
+      netGain = -bet;
+      userData.money -= bet;
+      addToJackpot(bet);
+    }
     saveDB();
 
     const colorEmoji = winningColor === 'rouge' ? '🔴' : (winningColor === 'noir' ? '⚫' : '🟢');
 
     await interaction.editReply({ embeds: [
       new EmbedBuilder()
-        .setTitle(won ? '🎰 VICTOIRE À LA ROULETTE !' : '🎰 PERDU !')
-        .setDescription(`Le chiffre gagnant est le : **${winningNumber}** (${colorEmoji} ${winningColor.toUpperCase()})\n\n` +
-          `• **Ton pari :** ${type === 'numero' ? `Numéro ${chosenNum}` : type.toUpperCase()}\n` +
-          `${won ? `🎉 Tu remportes **+${netGain.toLocaleString()} 🪙** (x${multiplier}) !` : `💥 Tu perds **-${bet} 🪙**.`}`)
-        .setColor(won ? '#2ECC71' : '#E74C3C')
+        .setTitle(wonJackpot ? '🚨 JACKPOT DÉCROCHÉ !!! 🚨' : won ? '🎰 VICTOIRE À LA ROULETTE !' : '🎰 PERDU !')
+        .setDescription(`Chiffre gagnant : **${winningNumber}** (${colorEmoji} ${winningColor.toUpperCase()})\n\n` +
+          `${wonJackpot ? `👑 **INCROYABLE !** Tu as décroché le **JACKPOT** et remportes **+${netGain.toLocaleString()} 🪙** !` : won ? `🎉 Tu remportes **+${netGain.toLocaleString()} 🪙** !` : `💥 Tu perds **-${bet} 🪙**.`}`)
+        .setColor(wonJackpot ? '#FFD700' : won ? '#2ECC71' : '#E74C3C')
     ]});
   }
 
-  // 🃏 BLACKJACK (AVEC BOUTONS INTERACTIFS)
+  // 🃏 BLACKJACK
   if (commandName === 'blackjack') {
     const bet = options.getInteger('mise');
     if (bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Solde insuffisant.', ephemeral: true });
@@ -377,6 +580,7 @@ client.on('interactionCreate', async interaction => {
         playerHand.push(draw());
         if (getScore(playerHand) > 21) {
           userData.money -= bet;
+          addToJackpot(bet);
           saveDB();
           collector.stop('bust');
           return i.update({ embeds: [
@@ -401,7 +605,7 @@ client.on('interactionCreate', async interaction => {
         else if (pScore === dScore) drawGame = true;
 
         if (win) userData.money += bet;
-        else if (!drawGame) userData.money -= bet;
+        else if (!drawGame) { userData.money -= bet; addToJackpot(bet); }
         saveDB();
 
         return i.update({ embeds: [
