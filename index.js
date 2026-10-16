@@ -248,7 +248,7 @@ client.on('interactionCreate', async interaction => {
 
   // 🎫 6. JEU À GRATTER CASH (Proba 1/3)
   if (commandName === 'cash') {
-    const TICKET_COST = 100;
+    const TICKET_COST = 500;
     if (userData.money < TICKET_COST) return interaction.reply({ content: `❌ Un ticket CASH coûte **500 🪙**.`, ephemeral: true });
 
     userData.money -= TICKET_COST;
@@ -347,4 +347,202 @@ client.on('interactionCreate', async interaction => {
       let trackStr = "";
       for (let h of horses) {
         const line = "➖".repeat(h.pos) + "🏇" + "➖".repeat(10 - h.pos);
-        trackStr += `N
+        trackStr += `N°${h.id} **${h.name}** : [${line}] 🏁\n`;
+      }
+      return trackStr;
+    };
+
+    let winner = null;
+    for (let turn = 0; turn < 5; turn++) {
+      for (let h of horses) {
+        if (!winner) {
+          h.pos += Math.floor(Math.random() * 3) + 1;
+          if (h.pos >= 10) { h.pos = 10; if (!winner) winner = h; }
+        }
+      }
+
+      await interaction.editReply({ embeds: [
+        new EmbedBuilder().setTitle('🏇 COURSE PMU EN COURS !').setDescription(renderTrack()).setColor('#E67E22')
+      ]});
+      await new Promise(r => setTimeout(r, 1200));
+      if (winner) break;
+    }
+
+    const won = winner.id === horseChoice;
+    const gain = won ? bet * 4 : -bet;
+
+    if (won) userData.money += (bet * 4);
+    else addToJackpot(bet);
+    saveDB();
+
+    await interaction.editReply({ embeds: [
+      new EmbedBuilder()
+        .setTitle(won ? '🎉 VICTOIRE AU PMU !' : '💥 DÉFAITE AU PMU !')
+        .setDescription(`${renderTrack()}\n\n🏆 Vainqueur : **${winner.name}** (N°${winner.id}) !\n${won ? `🎉 Tu remportes **+${gain.toLocaleString()} 🪙** (Cote x4) !` : `💥 Ton cheval n'a pas fini 1er. Tu perds **-${bet.toLocaleString()} 🪙**.`}`)
+        .setColor(won ? '#2ECC71' : '#E74C3C')
+    ]});
+  }
+
+  // 9. LEADERBOARD
+  if (commandName === 'leaderboard') {
+    const sorted = Object.entries(db.users).map(([id, data]) => ({ id, money: data.money })).sort((a, b) => b.money - a.money).slice(0, 10);
+    let desc = ""; const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+    for (let i = 0; i < sorted.length; i++) {
+      const u = await client.users.fetch(sorted[i].id).catch(() => null);
+      desc += `${medals[i]} **${u ? u.username : 'Inconnu'}** — ${sorted[i].money.toLocaleString()} 🪙\n`;
+    }
+    return interaction.reply({ embeds: [new EmbedBuilder().setTitle('🏆 TOP 10 CASINO').setDescription(desc || 'Aucun joueur.').setColor('#FFD700')] });
+  }
+
+  // 10. BOUNTY
+  if (commandName === 'bounty') {
+    const target = options.getUser('cible'); const amount = options.getInteger('montant');
+    if (target.id === user.id || target.bot || amount <= 0 || userData.money < amount) return interaction.reply({ content: '❌ Invalide.', ephemeral: true });
+    userData.money -= amount; db.bounties[target.id] = (db.bounties[target.id] || 0) + amount; saveDB();
+    return interaction.reply({ embeds: [new EmbedBuilder().setTitle('🎯 PRIME AJOUTÉE !').setDescription(`+${amount.toLocaleString()} 🪙 sur ${target}.`).setColor('#E74C3C')] });
+  }
+
+  // 11. JACKPOT
+  if (commandName === 'jackpot') {
+    return interaction.reply({ embeds: [new EmbedBuilder().setTitle('🎰 JACKPOT').setDescription(`Cagnotte : **${(db.jackpot || 1000).toLocaleString()} 🪙**`).setColor('#FFD700')] });
+  }
+
+  // 12. ADMIN ADDMONEY
+  if (commandName === 'addmoney') {
+    if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Admin requis.', ephemeral: true });
+    const targetUser = options.getUser('utilisateur'); const rawAmount = options.getString('montant').trim().toLowerCase();
+    const targetData = getUser(targetUser.id);
+    if (rawAmount === 'all' || rawAmount === 'max') { targetData.money = 0; } 
+    else { const amount = parseInt(rawAmount, 10); if (isNaN(amount)) return interaction.reply({ content: '❌ Invalide.', ephemeral: true }); targetData.money += amount; if (targetData.money < 0) targetData.money = 0; }
+    saveDB();
+    return interaction.reply({ embeds: [new EmbedBuilder().setTitle('⚙️ [ADMIN] Solde Modifié').setDescription(`Nouveau solde de ${targetUser} : **${targetData.money.toLocaleString()} 🪙**`).setColor('#27AE60')] });
+  }
+
+  // ================= GAMBLING STANDARD =================
+
+  // DUEL
+  if (commandName === 'duel') {
+    const target = options.getUser('adversaire'); const bet = options.getInteger('mise');
+    if (target.id === user.id || target.bot || bet <= 0 || userData.money < bet) return interaction.reply({ content: '❌ Invalide.', ephemeral: true });
+    const targetData = getUser(target.id); if (targetData.money < bet) return interaction.reply({ content: '❌ Solde adversaire insuffisant.', ephemeral: true });
+    const rowAccept = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('accept_duel').setLabel('✅ Accepter').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('refuse_duel').setLabel('❌ Refuser').setStyle(ButtonStyle.Danger));
+    const resp = await interaction.reply({ content: `${target}`, embeds: [new EmbedBuilder().setTitle('⚔️ DUEL !').setDescription(`${user} défie ${target} pour **${bet.toLocaleString()} 🪙** !`)], components: [rowAccept], fetchReply: true });
+    const collector = resp.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30000 });
+    collector.on('collect', async i => {
+      if (i.user.id !== target.id) return;
+      if (i.customId === 'accept_duel') {
+        collector.stop(); userData.money -= bet; targetData.money -= bet; saveDB();
+        let c1 = null, c2 = null;
+        const rowC = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pierre').setLabel('🪨').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('feuille').setLabel('🍃').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('ciseaux').setLabel('✂️').setStyle(ButtonStyle.Primary));
+        await i.update({ embeds: [new EmbedBuilder().setTitle('⚔️ DUEL EN COURS').setDescription('Choisissez en secret !')], components: [rowC] });
+        const gColl = resp.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30000 });
+        gColl.on('collect', async btn => {
+          if (btn.user.id === user.id) c1 = btn.customId; if (btn.user.id === target.id) c2 = btn.customId;
+          await btn.reply({ content: 'Choix enregistré !', ephemeral: true });
+          if (c1 && c2) {
+            gColl.stop(); let winner = null, loser = null;
+            if (c1 === c2) winner = 'draw';
+            else if ((c1 === 'pierre' && c2 === 'ciseaux') || (c1 === 'feuille' && c2 === 'pierre') || (c1 === 'ciseaux' && c2 === 'feuille')) { winner = user; loser = target; }
+            else { winner = target; loser = user; }
+            if (winner === 'draw') { userData.money += bet; targetData.money += bet; saveDB(); return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('⚖️ ÉGALITÉ !')], components: [] }); }
+            let totalGain = bet * 2; if (db.bounties[loser.id]) { totalGain += db.bounties[loser.id]; delete db.bounties[loser.id]; }
+            getUser(winner.id).money += totalGain; saveDB();
+            return interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`🏆 VICTOIRE DE ${winner.username} !`).setDescription(`Gain total : **+${totalGain.toLocaleString()} 🪙**`)], components: [] });
+          }
+        });
+      }
+    });
+  }
+
+  // CRASH
+  if (commandName === 'crash') {
+    const rawBet = options.getString('mise'); const currentJob = JOBS.find(j => j.id === userData.job_id);
+    const betResult = parseBet(rawBet, userData.money, currentJob.maxBet); if (!betResult.valid) return interaction.reply({ content: betResult.reason, ephemeral: true });
+    const bet = betResult.amount; userData.money -= bet; saveDB();
+    const crashPoint = +(1 + Math.random() * Math.random() * 8).toFixed(2); let currentMultiplier = 1.00, cashedOut = false;
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cashout').setLabel('💸 CASH OUT').setStyle(ButtonStyle.Success));
+    const response = await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🚀 CRASH').setDescription(`Multiplicateur : **x1.00**`)], components: [row], fetchReply: true });
+    const collector = response.createMessageComponentCollector({ componentType: ComponentType.Button, time: 20000 });
+    const interval = setInterval(async () => {
+      if (cashedOut) { clearInterval(interval); return; }
+      currentMultiplier += 0.20;
+      if (currentMultiplier >= crashPoint) {
+        clearInterval(interval); collector.stop(); addToJackpot(bet);
+        await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('💥 CRASH !').setDescription(`Crashé à x${crashPoint.toFixed(2)}. Perte: -${bet} 🪙`)], components: [] });
+      } else { await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🚀 CRASH').setDescription(`Multiplicateur : **x${currentMultiplier.toFixed(2)}**`)] }).catch(() => {}); }
+    }, 1200);
+    collector.on('collect', async i => {
+      if (i.user.id === user.id && !cashedOut) {
+        cashedOut = true; clearInterval(interval); collector.stop();
+        const win = Math.floor(bet * currentMultiplier); userData.money += win; saveDB();
+        await i.update({ embeds: [new EmbedBuilder().setTitle('🎉 CASH OUT !').setDescription(`Gagné : **+${win.toLocaleString()} 🪙** (x${currentMultiplier.toFixed(2)})`)], components: [] });
+      }
+    });
+  }
+
+  // COINFLIP
+  if (commandName === 'coinflip') {
+    const rawBet = options.getString('mise'); const choice = options.getString('choix'); const currentJob = JOBS.find(j => j.id === userData.job_id);
+    const betResult = parseBet(rawBet, userData.money, currentJob.maxBet); if (!betResult.valid) return interaction.reply({ content: betResult.reason, ephemeral: true });
+    const bet = betResult.amount; await interaction.deferReply();
+    setTimeout(async () => {
+      const res = Math.random() < 0.5 ? 'pile' : 'face'; const won = res === choice;
+      if (won) userData.money += bet; else { userData.money -= bet; addToJackpot(bet); } saveDB();
+      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle(won ? '🎉 GAGNÉ !' : '💥 PERDU !').setDescription(`Résultat : **${res.toUpperCase()}** (${won ? `+${bet}` : `-${bet}`} 🪙)`)] });
+    }, 2000);
+  }
+
+  // SHIFUMI
+  if (commandName === 'shifumi') {
+    const rawBet = options.getString('mise'); const choice = options.getString('choix'); const currentJob = JOBS.find(j => j.id === userData.job_id);
+    const betResult = parseBet(rawBet, userData.money, currentJob.maxBet); if (!betResult.valid) return interaction.reply({ content: betResult.reason, ephemeral: true });
+    const bet = betResult.amount; await interaction.deferReply();
+    const botC = ['pierre', 'feuille', 'ciseaux'][Math.floor(Math.random() * 3)];
+    let outcome = (choice === botC) ? 'draw' : ((choice === 'pierre' && botC === 'ciseaux') || (choice === 'feuille' && botC === 'pierre') || (choice === 'ciseaux' && botC === 'feuille')) ? 'win' : 'lose';
+    if (outcome === 'win') userData.money += bet; else if (outcome === 'lose') { userData.money -= bet; addToJackpot(bet); } saveDB();
+    await interaction.editReply({ embeds: [new EmbedBuilder().setTitle(outcome === 'win' ? '🎉 GAGNÉ !' : outcome === 'draw' ? '⚖️ ÉGALITÉ' : '💥 PERDU !').setDescription(`Toi: ${choice} vs Bot: ${botC}`)] });
+  }
+
+  // ROULETTE
+  if (commandName === 'roulette') {
+    const rawBet = options.getString('mise'); const type = options.getString('type'); const chosenNum = options.getInteger('numero'); const currentJob = JOBS.find(j => j.id === userData.job_id);
+    const betResult = parseBet(rawBet, userData.money, currentJob.maxBet); if (!betResult.valid) return interaction.reply({ content: betResult.reason, ephemeral: true });
+    const bet = betResult.amount; await interaction.deferReply();
+    const winNum = Math.floor(Math.random() * 37); let winColor = (winNum === 0) ? 'vert' : ([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(winNum) ? 'rouge' : 'noir');
+    let won = (type === winColor) || (type === 'pair' && winNum !== 0 && winNum % 2 === 0) || (type === 'impair' && winNum % 2 !== 0) || (type === 'numero' && winNum === chosenNum);
+    let mult = (type === 'vert' || type === 'numero') ? 35 : 2;
+    if (won) userData.money += (bet * mult) - bet; else { userData.money -= bet; addToJackpot(bet); } saveDB();
+    await interaction.editReply({ embeds: [new EmbedBuilder().setTitle(won ? '🎰 VICTOIRE !' : '🎰 PERDU !').setDescription(`Chiffre gagnant : **${winNum}** (${winColor.toUpperCase()})\n${won ? `+${(bet * mult) - bet}` : `-${bet}`} 🪙`)] });
+  }
+
+  // BLACKJACK
+  if (commandName === 'blackjack') {
+    const rawBet = options.getString('mise'); const currentJob = JOBS.find(j => j.id === userData.job_id);
+    const betResult = parseBet(rawBet, userData.money, currentJob.maxBet); if (!betResult.valid) return interaction.reply({ content: betResult.reason, ephemeral: true });
+    const bet = betResult.amount; const deck = [2,3,4,5,6,7,8,9,10,10,10,10,11]; const draw = () => deck[Math.floor(Math.random() * deck.length)];
+    let pHand = [draw(), draw()], dHand = [draw(), draw()];
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('hit').setLabel('🃏 Tirer').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('stand').setLabel('✋ Rester').setStyle(ButtonStyle.Success));
+    const response = await interaction.reply({ embeds: [new EmbedBuilder().setTitle('🃏 Blackjack').addFields({ name: 'Tes cartes', value: `${pHand.join(', ')} (${calculateBlackjackScore(pHand)})` })], components: [row], fetchReply: true });
+    const collector = response.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
+    collector.on('collect', async i => {
+      if (i.user.id !== user.id) return;
+      if (i.customId === 'hit') {
+        pHand.push(draw());
+        if (calculateBlackjackScore(pHand) > 21) {
+          userData.money -= bet; addToJackpot(bet); saveDB(); collector.stop();
+          return i.update({ embeds: [new EmbedBuilder().setTitle('💥 BUST !').setDescription(`Total: ${calculateBlackjackScore(pHand)}. Perte: -${bet} 🪙`)], components: [] });
+        }
+        await i.update({ embeds: [new EmbedBuilder().setTitle('🃏 Blackjack').addFields({ name: 'Tes cartes', value: `${pHand.join(', ')} (${calculateBlackjackScore(pHand)})` })] });
+      }
+      if (i.customId === 'stand') {
+        collector.stop(); while (calculateBlackjackScore(dHand) < 17) dHand.push(draw());
+        const pS = calculateBlackjackScore(pHand), dS = calculateBlackjackScore(dHand);
+        let win = (dS > 21 || pS > dS), drawG = (pS === dS);
+        if (win) userData.money += bet; else if (!drawG) { userData.money -= bet; addToJackpot(bet); } saveDB();
+        return i.update({ embeds: [new EmbedBuilder().setTitle(win ? '🎉 VICTOIRE !' : drawG ? '⚖️ ÉGALITÉ' : '💥 PERDU !').setDescription(`Toi: ${pS} vs Banque: ${dS}`)], components: [] });
+      }
+    });
+  }
+});
+
+client.login(process.env.DISCORD_TOKEN);
